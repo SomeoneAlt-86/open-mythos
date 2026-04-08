@@ -1,84 +1,165 @@
 # Open-Mythos
 
-Open-Mythos is an automated LLM-assisted vulnerability discovery pipeline built around staged static-analysis workflows.
+Automated LLM-assisted vulnerability discovery pipeline.
 
-## Architecture Overview
+## Prerequisites
 
-The system runs in three logical stages:
+- Node.js >= 18
+- An API key in your environment:
+  - `OPENAI_API_KEY`, or
+  - `OPENROUTER_API_KEY`
 
-1. Recon stage
-- Generates a repository-specific threat model from source context.
-- Persists threat model records in SQLite with repository metadata.
+## Installation
 
-2. Target-crafting stage
-- Uses the threat model to identify likely vulnerability targets (`path` / `function` / `reason`).
-- Pulls existing targets and instructs the model to avoid repeating prior findings.
-- Inserts only new unique targets into the target queue.
-
-3. Research stage
-- Pulls queued targets where `scanned = 0`.
-- Builds a focused investigation prompt from queued targets plus threat model context.
-- Parses model findings JSON and stores normalized findings.
-- Marks processed targets as scanned to prevent reprocessing.
-
-## Data Model (High Level)
-
-SQLite is the system of record. Core entities:
-
-- `threat_models`
-- One row per generated threat model for a repo snapshot/context.
-
-- `target_items`
-- Normalized queue of targets linked to a `threat_model_id`.
-- Includes `scanned` state for downstream processing.
-- Unique key prevents duplicate targets for the same threat model.
-
-- `findings`
-- Normalized vulnerability findings linked to both `threat_model_id` and `target_item_id`.
-- Deduped by `(target_item_id, finding_hash)`.
-
-## Pipeline Behavior
-
-- Target insert semantics are insert-only for new unique items.
-- Existing target conflicts are ignored, not overwritten.
-
-- Research queue semantics:
-- Only unscanned targets are selected (`scanned = 0`).
-- Once processed, targets are marked scanned (`scanned = 1`).
-
-- Findings semantics:
-- Parsed from strict JSON output.
-- Validated and normalized before database insert.
-
-## Execution Flow
-
-Typical lifecycle:
-
-1. Generate threat model for a repository.
-2. Generate or extend target queue from that threat model.
-3. Run research batches on unscanned targets.
-4. Repeat target/research cycles until coverage is sufficient.
-
-## Runtime Requirements
-
-- Node.js runtime.
-- SQLite via `better-sqlite3`.
-- OpenAI-compatible API credentials in environment:
-- `OPENAI_API_KEY` or `OPENROUTER_API_KEY`
-- Optional `OPENAI_BASE_URL`
-
-## Minimal Loop Usage
-
-```js
-const { runAgenticLoop } = require('./loop');
-
-async function main() {
-  const result = await runAgenticLoop({
-    prompt: 'Analyze this repo and propose fixes for failing tests',
-    config: { workDir: process.cwd(), approvalMode: 'safe' },
-  });
-  console.log(result);
-}
-
-main().catch(console.error);
+```bash
+npm install -g open-mythos
 ```
+
+## Quickstart
+
+Run these 3 commands in the repository you want to analyze:
+
+```bash
+open-mythos recon
+open-mythos targets --repo-name "$(basename "$PWD")"
+open-mythos research --repo-name "$(basename "$PWD")" --limit 20
+```
+
+What this does:
+- `recon` creates and stores a threat model.
+- `targets` creates a deduplicated target queue from that threat model.
+- `research` scans unscanned targets and stores findings.
+
+Optional dashboard:
+
+```bash
+open-mythos serve --port 7331
+```
+
+Then open `http://localhost:7331`.
+
+## Full CLI Reference
+
+### Global
+
+- `open-mythos --help` Show CLI help
+- `open-mythos --version` Show installed version
+
+### `run`
+
+Run full pipeline (`recon -> targets -> research`).
+
+```bash
+open-mythos run [--repo-path <path>] [--repo-name <name>]
+```
+
+Flags:
+- `--repo-path <path>` Path to target repository (default: current directory)
+- `--repo-name <name>` Override detected repository name
+
+### `recon`
+
+Generate a threat model for a repository and store it in SQLite.
+
+```bash
+open-mythos recon [--repo-path <path>]
+```
+
+Flags:
+- `--repo-path <path>` Path to target repository (default: current directory)
+
+### `targets`
+
+Generate target queue items from an existing threat model.
+
+```bash
+open-mythos targets [--id <n>] [--repo-name <name>] [--repo-path <path>]
+```
+
+Flags:
+- `--id <n>` Threat model ID
+- `--repo-name <name>` Filter by repository name
+- `--repo-path <path>` Filter by repository path
+
+Note: at least one filter is required (`--id`, `--repo-name`, or `--repo-path`).
+
+### `research`
+
+Scan unscanned targets and store normalized findings.
+
+```bash
+open-mythos research [--threat-model-id <n>] [--repo-name <name>] [--repo-path <path>] [--limit <n>]
+```
+
+Flags:
+- `--threat-model-id <n>` Pin research to a specific threat model
+- `--repo-name <name>` Filter by repository name
+- `--repo-path <path>` Filter by repository path
+- `--limit <n>` Max targets pulled per batch (default: `20`)
+
+### `serve`
+
+Start read-only dashboard.
+
+```bash
+open-mythos serve [--port <n>]
+```
+
+Flags:
+- `--port <n>` Dashboard port (default: `7331`)
+
+### `db`
+
+Database utilities.
+
+```bash
+open-mythos db path
+open-mythos db list
+```
+
+Subcommands:
+- `db path` Print resolved SQLite database path
+- `db list` List repositories present in database
+
+## Environment Variables
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `OPENAI_API_KEY` | Conditionally | _(none)_ | API key for LLM calls (either this or `OPENROUTER_API_KEY` must be set). |
+| `OPENROUTER_API_KEY` | Conditionally | _(none)_ | Alternate API key for OpenRouter-compatible endpoint. |
+| `OPENAI_BASE_URL` | No | `https://openrouter.ai/api/v1` | Base URL for OpenAI-compatible API. |
+| `DEUS_MODEL` | No | `openai/gpt-4.1-mini` | Model identifier used by the agentic loop. |
+| `DEUS_MAX_ITER` | No | `60` | Max iterations in the agentic loop. |
+| `DEUS_TEMPERATURE` | No | `0.2` | Sampling temperature for model calls. |
+| `DEUS_APPROVAL_MODE` | No | `safe` | Approval mode passed to loop config. |
+| `DEUS_TRUNCATE_THRESHOLD` | No | `40` | Message-history truncation threshold. |
+| `DEUS_TRUNCATE_KEEP_RECENT` | No | `10` | Number of recent turns to keep when truncating. |
+| `OPEN_MYTHOS_DB_PATH` | No | `src/data/open-mythos.sqlite` | SQLite file path. |
+| `DASHBOARD_PORT` | No | `7331` | Port used by dashboard server. |
+
+## Contributing
+
+1. Fork and clone the repository.
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Set environment variables (copy from `.env.example` if needed).
+4. Run tests:
+
+```bash
+npm test
+```
+
+5. Validate CLI behavior locally:
+
+```bash
+node bin/open-mythos.js --help
+```
+
+6. Open a pull request with:
+- clear problem statement
+- focused change set
+- test or validation notes
