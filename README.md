@@ -13,6 +13,7 @@ Automated LLM-assisted vulnerability discovery pipeline.
 ## Installation
 
 **npm package under progress**
+**soon**
 ```bash
 npm install -g open-mythos
 ```
