@@ -1,0 +1,44 @@
+{
+  "name": "open-mythos",
+  "version": "0.1.0",
+  "description": "Automated LLM-assisted vulnerability discovery pipeline with SQLite-backed recon, targeting, and research stages.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "index.js",
+  "bin": {
+    "open-mythos": "./cli.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "cli.js",
+    "index.js",
+    "open-mythos.js",
+    "db.js",
+    "loop.js",
+    "recon.js",
+    "targets.js",
+    "research.js",
+    "server.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node cli.js",
+    "pipeline": "node cli.js pipeline",
+    "dashboard": "node cli.js dashboard",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "security",
+    "sast",
+    "vulnerability-research",
+    "agentic",
+    "sqlite"
+  ],
+  "dependencies": {
+    "better-sqlite3": "^9.0.0",
+    "openai": "^4.0.0"
+  }
+}

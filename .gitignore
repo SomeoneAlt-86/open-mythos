@@ -1,0 +1,8 @@
+node_modules/
+*.log
+npm-debug.log*
+
+# Runtime artifacts
+data/*.sqlite
+repos/
+*.tgz

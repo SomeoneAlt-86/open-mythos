@@ -1,9 +1,21 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const DEFAULT_DB_PATH = path.join(__dirname, 'data', 'open-mythos.sqlite');
+function defaultDataDir() {
+  if (process.platform === 'win32') {
+    return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support');
+  }
+
+  return process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+}
+
+const DEFAULT_DB_PATH = path.join(defaultDataDir(), 'open-mythos', 'open-mythos.sqlite');
 
 function ensureParentDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

@@ -1,84 +1,91 @@
 # Open-Mythos
 
-Open-Mythos is an automated LLM-assisted vulnerability discovery pipeline built around staged static-analysis workflows.
+Open-Mythos is an LLM-assisted vulnerability discovery pipeline with three stages: recon, target crafting, and research.
 
-## Architecture Overview
+## Install
 
-The system runs in three logical stages:
+```bash
+npm install open-mythos
+```
 
-1. Recon stage
-- Generates a repository-specific threat model from source context.
-- Persists threat model records in SQLite with repository metadata.
+## CLI Usage
 
-2. Target-crafting stage
-- Uses the threat model to identify likely vulnerability targets (`path` / `function` / `reason`).
-- Pulls existing targets and instructs the model to avoid repeating prior findings.
-- Inserts only new unique targets into the target queue.
+```bash
+open-mythos pipeline
+open-mythos recon
+open-mythos targets --repo-name my-repo
+open-mythos research --repo-name my-repo --limit 20
+open-mythos dashboard --port 7331
+```
 
-3. Research stage
-- Pulls queued targets where `scanned = 0`.
-- Builds a focused investigation prompt from queued targets plus threat model context.
-- Parses model findings JSON and stores normalized findings.
-- Marks processed targets as scanned to prevent reprocessing.
+Default command:
 
-## Data Model (High Level)
+```bash
+open-mythos
+```
 
-SQLite is the system of record. Core entities:
+This runs `pipeline` (recon -> targets -> research).
 
-- `threat_models`
-- One row per generated threat model for a repo snapshot/context.
+## Environment
 
-- `target_items`
-- Normalized queue of targets linked to a `threat_model_id`.
-- Includes `scanned` state for downstream processing.
-- Unique key prevents duplicate targets for the same threat model.
+- `OPENAI_API_KEY` or `OPENROUTER_API_KEY` (required for model calls)
+- `OPENAI_BASE_URL` (optional override)
+- `OPEN_MYTHOS_DB_PATH` (optional SQLite override)
+- `DASHBOARD_PORT` (optional, used by `dashboard`)
 
-- `findings`
-- Normalized vulnerability findings linked to both `threat_model_id` and `target_item_id`.
-- Deduped by `(target_item_id, finding_hash)`.
+## Database Location
 
-## Pipeline Behavior
+By default, Open-Mythos stores SQLite data in platform user data directories:
 
-- Target insert semantics are insert-only for new unique items.
-- Existing target conflicts are ignored, not overwritten.
+- Linux: `~/.local/share/open-mythos/open-mythos.sqlite`
+- macOS: `~/Library/Application Support/open-mythos/open-mythos.sqlite`
+- Windows: `%APPDATA%\\open-mythos\\open-mythos.sqlite`
 
-- Research queue semantics:
-- Only unscanned targets are selected (`scanned = 0`).
-- Once processed, targets are marked scanned (`scanned = 1`).
+Set `OPEN_MYTHOS_DB_PATH` if you want a project-local or custom location.
 
-- Findings semantics:
-- Parsed from strict JSON output.
-- Validated and normalized before database insert.
-
-## Execution Flow
-
-Typical lifecycle:
-
-1. Generate threat model for a repository.
-2. Generate or extend target queue from that threat model.
-3. Run research batches on unscanned targets.
-4. Repeat target/research cycles until coverage is sufficient.
-
-## Runtime Requirements
-
-- Node.js runtime.
-- SQLite via `better-sqlite3`.
-- OpenAI-compatible API credentials in environment:
-- `OPENAI_API_KEY` or `OPENROUTER_API_KEY`
-- Optional `OPENAI_BASE_URL`
-
-## Minimal Loop Usage
+## Programmatic Usage
 
 ```js
-const { runAgenticLoop } = require('./loop');
+const { runPipeline } = require('open-mythos');
 
-async function main() {
-  const result = await runAgenticLoop({
-    prompt: 'Analyze this repo and propose fixes for failing tests',
-    config: { workDir: process.cwd(), approvalMode: 'safe' },
-  });
-  console.log(result);
-}
-
-main().catch(console.error);
+runPipeline().catch(console.error);
 ```
+
+For lower-level APIs:
+
+```js
+const { recon, targets, research, db, loop, server } = require('open-mythos');
+```
+
+## Stages
+
+1. Recon
+- Builds a repo-specific threat model and stores it in SQLite.
+
+2. Targets
+- Generates high-risk target candidates from the threat model.
+- Deduplicates by `(threat_model_id, path, function)`.
+
+3. Research
+- Pulls unscanned targets.
+- Produces normalized findings JSON.
+- Marks processed targets as scanned.
+
+## Dashboard
+
+Run:
+
+```bash
+open-mythos dashboard
+```
+
+Then open `http://127.0.0.1:7331`.
+
+## Release Checklist (npm)
+
+```bash
+npm run pack:check
+npm publish --access public
+```
+
+The package is configured with a strict `"files"` allowlist so runtime artifacts like local SQLite data are not published.
