@@ -1,6 +1,7 @@
 # Open-Mythos
 
 Automated LLM-assisted vulnerability discovery pipeline.
+<img width="1916" height="935" alt="Screenshot_20260408_192816" src="https://github.com/user-attachments/assets/ad7939ab-4a50-43e2-820b-1819d14216e2" />
 
 ## Prerequisites
 
