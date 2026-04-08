@@ -34,9 +34,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "start":   "node bin/open-mythos.js",
-    "serve":   "node bin/open-mythos.js serve",
-    "test":    "node --test",
+    "start": "node bin/open-mythos.js",
+    "serve": "node bin/open-mythos.js serve",
+    "test": "node --test",
     "prepare": "node -e \"require('better-sqlite3')\""
   },
   "engines": {
