@@ -1,0 +1,53 @@
+{
+  "name": "open-mythos",
+  "version": "0.1.0",
+  "description": "Automated LLM-assisted vulnerability discovery pipeline",
+  "keywords": [
+    "llm",
+    "ai",
+    "security",
+    "vulnerability",
+    "static-analysis",
+    "agent",
+    "pentest",
+    "recon"
+  ],
+  "homepage": "https://github.com/SomeoneAlt-86/open-mythos#readme",
+  "bugs": {
+    "url": "https://github.com/SomeoneAlt-86/open-mythos/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SomeoneAlt-86/open-mythos.git"
+  },
+  "license": "MIT",
+  "author": "S. Sidhu",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "bin": {
+    "open-mythos": "bin/open-mythos.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start":   "node bin/open-mythos.js",
+    "serve":   "node bin/open-mythos.js serve",
+    "test":    "node --test",
+    "prepare": "node -e \"require('better-sqlite3')\""
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "commander": "^12.1.0",
+    "openai": "^6.33.0"
+  },
+  "devDependencies": {
+    "dotenv": "^16.4.0"
+  }
+}
