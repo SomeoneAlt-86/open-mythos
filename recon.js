@@ -1,14 +1,29 @@
-const {runAgenticLoop} = require('./loop');
+const path = require('path');
+const { runAgenticLoop } = require('./loop');
+const { openDatabase, insertThreatModel } = require('./db');
 
 async function run(prompt) {
-	const result = await runAgenticLoop({
-		prompt: prompt,
-		config: {workDir: process.cwd(), approvalMode: 'safe'},
-	})
-	return result
+  const result = await runAgenticLoop({
+    prompt,
+    config: { workDir: process.cwd(), approvalMode: 'safe' },
+  });
+  return result;
 }
 
-prompt = `
+function extractThreatModel(output) {
+  const text = String(output || '').trim();
+  if (!text) return '';
+
+  const fenced = text.match(/```(?:markdown|md)?\s*\n([\s\S]*?)\n```/i);
+  const body = fenced ? fenced[1].trim() : text;
+  const lines = body.split(/\r?\n/);
+  const idx = lines.findIndex((line) => /^#\s*Threat Model\s*$/i.test(line.trim()));
+  if (idx >= 0) return lines.slice(idx).join('\n').trim();
+  return body;
+}
+
+async function main() {
+  const prompt = `
 You are an autonomous security analysis agent operating on a large code repository.
 
 Your goal is to **systematically identify high-risk areas for vulnerabilities using static analysis principles**, not to randomly scan code.
@@ -133,6 +148,28 @@ Structure EXACTLY as follows:
 - ...
 """
 
-`
+`;
 
-run(prompt).catch(console.error())
+  const threatModelOutput = await run(prompt);
+  const threatModel = extractThreatModel(threatModelOutput);
+  if (!threatModel) {
+    throw new Error('Model returned empty output; cannot insert threat model.');
+  }
+
+  const repoPath = process.cwd();
+  const repoName = path.basename(repoPath);
+
+  const db = openDatabase();
+  try {
+    const id = insertThreatModel(db, {
+      repo_name: repoName,
+      repo_path: repoPath,
+      threat_model: threatModel,
+    });
+    console.log(`Threat model stored in database with id=${id} (repo=${repoName})`);
+  } finally {
+    db.close();
+  }
+}
+
+main().catch(console.error);
