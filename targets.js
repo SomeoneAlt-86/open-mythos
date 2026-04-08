@@ -1,6 +1,6 @@
 'use strict';
 
-const { openDatabase, insertTargets } = require('./db');
+const { openDatabase, insertNewTargetItems } = require('./db');
 const { runAgenticLoop } = require('./loop');
 
 async function run(prompt) {
@@ -71,21 +71,21 @@ function pull_threat_model(filters = {}) {
 function pull_existing_targets_json({ threat_model_id, repo_name, repo_path }) {
   const db = openDatabase();
   try {
-    const row = db.prepare(`
-      SELECT targets_json
-      FROM targets
+    const rows = db.prepare(`
+      SELECT path, function, reason, scanned
+      FROM target_items
       WHERE threat_model_id = @threat_model_id
          OR (repo_name = @repo_name AND repo_path = @repo_path)
-      ORDER BY created_at DESC, id DESC
-      LIMIT 1
-    `).get({
+      ORDER BY created_at ASC, id ASC
+      LIMIT 5000
+    `).all({
       threat_model_id,
       repo_name,
       repo_path,
     });
 
-    if (!row) return '';
-    return String(row.targets_json ?? '').trim();
+    if (!rows || !rows.length) return '';
+    return JSON.stringify({ targets: rows }, null, 2);
   } finally {
     db.close();
   }
@@ -188,32 +188,30 @@ function parseTargetsArray(jsonText) {
   return targets.filter((t) => t && typeof t === 'object');
 }
 
-function mergeTargets(existingTargetsJson, newTargetsJson) {
-  const existing = parseTargetsArray(existingTargetsJson);
-  const incoming = parseTargetsArray(newTargetsJson);
+function normalizeTargetItems(jsonText) {
+  const rows = parseTargetsArray(jsonText);
+  const normalized = [];
   const seen = new Set();
-  const merged = [];
 
-  const add = (t) => {
+  for (const t of rows) {
     const pathVal = String(t.path || '').trim();
-    const fnVal = String(t.function || '').trim();
+    const functionVal = String(t.function || '').trim();
     const reasonVal = String(t.reason || '').trim();
-    if (!pathVal || !fnVal || !reasonVal) return;
+    if (!pathVal || !functionVal || !reasonVal) continue;
 
-    const key = `${pathVal}::${fnVal}`;
-    if (seen.has(key)) return;
+    const key = `${pathVal}::${functionVal}`;
+    if (seen.has(key)) continue;
     seen.add(key);
-    merged.push({
+
+    normalized.push({
       path: pathVal,
-      function: fnVal,
+      function: functionVal,
       reason: reasonVal,
+      scanned: Number.isInteger(t.scanned) ? t.scanned : 0,
     });
-  };
+  }
 
-  for (const t of existing) add(t);
-  for (const t of incoming) add(t);
-
-  return JSON.stringify({ targets: merged }, null, 2);
+  return normalized;
 }
 
 async function main(filters = {}) {
@@ -231,23 +229,34 @@ async function main(filters = {}) {
 
   const prompt = buildCrafterPrompt(threatModelText, existingTargetsJson);
   const modelOutput = await run(prompt);
-  const newTargetsJson = parseTargetsJson(modelOutput);
-  const targetsJson = mergeTargets(existingTargetsJson, newTargetsJson);
+  const targetsJson = parseTargetsJson(modelOutput);
+  const targetItems = normalizeTargetItems(targetsJson);
 
   const db = openDatabase();
   try {
-    const targetsId = insertTargets(db, {
+    const insertedItems = insertNewTargetItems(db, {
       threat_model_id: threatModelRow.id,
       repo_name: threatModelRow.repo_name,
       repo_path: threatModelRow.repo_path,
-      targets_json: targetsJson,
+      targets: targetItems,
     });
 
-    const count = JSON.parse(targetsJson).targets.length;
+    const count = targetItems.length;
+    const total = db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM target_items
+      WHERE threat_model_id = @threat_model_id
+    `).get({ threat_model_id: threatModelRow.id }).c;
+
     console.log(
-      `Stored targets id=${targetsId} threat_model_id=${threatModelRow.id} repo=${threatModelRow.repo_name} count=${count}`
+      `Stored target_items threat_model_id=${threatModelRow.id} repo=${threatModelRow.repo_name} parsed_count=${count} target_items_inserted=${insertedItems} total_for_threat_model=${total}`
     );
-    return { id: targetsId, threat_model_id: threatModelRow.id, count };
+    return {
+      threat_model_id: threatModelRow.id,
+      parsed_count: count,
+      target_items_inserted: insertedItems,
+      total_for_threat_model: total,
+    };
   } finally {
     db.close();
   }
@@ -273,7 +282,7 @@ function parseCliArgs(argv) {
 
 module.exports = {
   main,
-  mergeTargets,
+  normalizeTargetItems,
   parseTargetsJson,
   pull_existing_targets_json,
   pull_threat_model,

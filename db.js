@@ -32,22 +32,69 @@ function initSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_threat_models_created_at
       ON threat_models (created_at);
+  `);
 
-    CREATE TABLE IF NOT EXISTS targets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      threat_model_id INTEGER NOT NULL,
-      repo_name TEXT NOT NULL,
-      repo_path TEXT NOT NULL,
-      targets_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY(threat_model_id) REFERENCES threat_models(id)
-    );
+  const existingColumns = db.prepare('PRAGMA table_info(target_items)').all().map((c) => c.name);
+  const hasLegacyTargetItems = existingColumns.includes('targets_id');
 
-    CREATE INDEX IF NOT EXISTS idx_targets_threat_model_id
-      ON targets (threat_model_id);
+  if (hasLegacyTargetItems) {
+    db.exec(`
+      ALTER TABLE target_items RENAME TO target_items_legacy;
 
-    CREATE INDEX IF NOT EXISTS idx_targets_repo_name_created_at
-      ON targets (repo_name, created_at);
+      CREATE TABLE target_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        threat_model_id INTEGER NOT NULL,
+        repo_name TEXT NOT NULL,
+        repo_path TEXT NOT NULL,
+        path TEXT NOT NULL,
+        function TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        scanned INT NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY(threat_model_id) REFERENCES threat_models(id),
+        UNIQUE(threat_model_id, path, function)
+      );
+
+      INSERT OR IGNORE INTO target_items (
+        threat_model_id, repo_name, repo_path, path, function, reason, scanned, created_at
+      )
+      SELECT
+        threat_model_id,
+        repo_name,
+        repo_path,
+        path,
+        function,
+        reason,
+        COALESCE(scanned, 0),
+        COALESCE(created_at, datetime('now'))
+      FROM target_items_legacy;
+
+      DROP TABLE target_items_legacy;
+    `);
+  } else {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS target_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        threat_model_id INTEGER NOT NULL,
+        repo_name TEXT NOT NULL,
+        repo_path TEXT NOT NULL,
+        path TEXT NOT NULL,
+        function TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        scanned INT NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY(threat_model_id) REFERENCES threat_models(id),
+        UNIQUE(threat_model_id, path, function)
+      );
+    `);
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_target_items_threat_model_id
+      ON target_items (threat_model_id);
+
+    CREATE INDEX IF NOT EXISTS idx_target_items_repo_name_created_at
+      ON target_items (repo_name, created_at);
   `);
 }
 
@@ -70,19 +117,45 @@ function insertThreatModel(db, payload) {
   return result.lastInsertRowid;
 }
 
-function insertTargets(db, payload) {
+function insertNewTargetItems(db, payload) {
+  const { threat_model_id, repo_name, repo_path, targets } = payload;
+  if (!Array.isArray(targets)) {
+    throw new Error('insertNewTargetItems requires `targets` to be an array.');
+  }
+
   const stmt = db.prepare(`
-    INSERT INTO targets (threat_model_id, repo_name, repo_path, targets_json)
-    VALUES (@threat_model_id, @repo_name, @repo_path, @targets_json)
+    INSERT INTO target_items (
+      threat_model_id, repo_name, repo_path, path, function, reason, scanned
+    ) VALUES (
+      @threat_model_id, @repo_name, @repo_path, @path, @function, @reason, @scanned
+    )
+    ON CONFLICT(threat_model_id, path, function) DO NOTHING
   `);
-  const result = stmt.run(payload);
-  return result.lastInsertRowid;
+
+  const tx = db.transaction((rows) => {
+    let changed = 0;
+    for (const t of rows) {
+      const result = stmt.run({
+        threat_model_id,
+        repo_name,
+        repo_path,
+        path: t.path,
+        function: t.function,
+        reason: t.reason,
+        scanned: Number.isInteger(t.scanned) ? t.scanned : 0,
+      });
+      changed += result.changes || 0;
+    }
+    return changed;
+  });
+
+  return tx(targets);
 }
 
 module.exports = {
   DEFAULT_DB_PATH,
   initSchema,
-  insertTargets,
+  insertNewTargetItems,
   insertThreatModel,
   openDatabase,
 };
