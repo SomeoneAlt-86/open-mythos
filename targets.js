@@ -68,7 +68,40 @@ function pull_threat_model(filters = {}) {
   return threatModelText;
 }
 
-function buildCrafterPrompt(threatModelText) {
+function pull_existing_targets_json({ threat_model_id, repo_name, repo_path }) {
+  const db = openDatabase();
+  try {
+    const row = db.prepare(`
+      SELECT targets_json
+      FROM targets
+      WHERE threat_model_id = @threat_model_id
+         OR (repo_name = @repo_name AND repo_path = @repo_path)
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `).get({
+      threat_model_id,
+      repo_name,
+      repo_path,
+    });
+
+    if (!row) return '';
+    return String(row.targets_json ?? '').trim();
+  } finally {
+    db.close();
+  }
+}
+
+function buildCrafterPrompt(threatModelText, existingTargetsJson) {
+  const existingTargetsSection = existingTargetsJson
+    ? `
+## EXISTING TARGETS (DO NOT REPEAT)
+The following targets were already identified. Exclude them from your output.
+Do not return the same path/function pair again.
+
+${existingTargetsJson}
+`
+    : '';
+
   return `
 You are a security researcher and your goal is to find vulnerabilities.
 You are given the following threat model for the given repository:
@@ -79,6 +112,7 @@ ${threatModelText}
 - Use shell search tools like ripgrep (rg), grep, find, or ctags.
 - Find sources, sinks, and identify the most likely vulnerability targets in the codebase.
 - Targets can include likely vulnerable functions, high-risk code blocks, or high-risk files.
+${existingTargetsSection}
 
 ## OUTPUT FORMAT
 Return ONLY valid JSON with this shape:
@@ -145,6 +179,43 @@ function parseTargetsJson(modelOutput) {
   return JSON.stringify({ targets }, null, 2);
 }
 
+function parseTargetsArray(jsonText) {
+  if (!jsonText || !String(jsonText).trim()) return [];
+  const candidate = extractJsonCandidate(jsonText);
+  const parsed = JSON.parse(candidate);
+  const targets = Array.isArray(parsed) ? parsed : parsed.targets;
+  if (!Array.isArray(targets)) return [];
+  return targets.filter((t) => t && typeof t === 'object');
+}
+
+function mergeTargets(existingTargetsJson, newTargetsJson) {
+  const existing = parseTargetsArray(existingTargetsJson);
+  const incoming = parseTargetsArray(newTargetsJson);
+  const seen = new Set();
+  const merged = [];
+
+  const add = (t) => {
+    const pathVal = String(t.path || '').trim();
+    const fnVal = String(t.function || '').trim();
+    const reasonVal = String(t.reason || '').trim();
+    if (!pathVal || !fnVal || !reasonVal) return;
+
+    const key = `${pathVal}::${fnVal}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push({
+      path: pathVal,
+      function: fnVal,
+      reason: reasonVal,
+    });
+  };
+
+  for (const t of existing) add(t);
+  for (const t of incoming) add(t);
+
+  return JSON.stringify({ targets: merged }, null, 2);
+}
+
 async function main(filters = {}) {
   const threatModelRow = pull_threat_model_row(filters);
   const threatModelText = String(threatModelRow.threat_model ?? '');
@@ -152,9 +223,16 @@ async function main(filters = {}) {
     throw new Error('Threat model content is empty.');
   }
 
-  const prompt = buildCrafterPrompt(threatModelText);
+  const existingTargetsJson = pull_existing_targets_json({
+    threat_model_id: threatModelRow.id,
+    repo_name: threatModelRow.repo_name,
+    repo_path: threatModelRow.repo_path,
+  });
+
+  const prompt = buildCrafterPrompt(threatModelText, existingTargetsJson);
   const modelOutput = await run(prompt);
-  const targetsJson = parseTargetsJson(modelOutput);
+  const newTargetsJson = parseTargetsJson(modelOutput);
+  const targetsJson = mergeTargets(existingTargetsJson, newTargetsJson);
 
   const db = openDatabase();
   try {
@@ -195,7 +273,9 @@ function parseCliArgs(argv) {
 
 module.exports = {
   main,
+  mergeTargets,
   parseTargetsJson,
+  pull_existing_targets_json,
   pull_threat_model,
   pull_threat_model_row,
 };
