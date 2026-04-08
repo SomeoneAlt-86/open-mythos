@@ -32,6 +32,22 @@ function initSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_threat_models_created_at
       ON threat_models (created_at);
+
+    CREATE TABLE IF NOT EXISTS targets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      threat_model_id INTEGER NOT NULL,
+      repo_name TEXT NOT NULL,
+      repo_path TEXT NOT NULL,
+      targets_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(threat_model_id) REFERENCES threat_models(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_targets_threat_model_id
+      ON targets (threat_model_id);
+
+    CREATE INDEX IF NOT EXISTS idx_targets_repo_name_created_at
+      ON targets (repo_name, created_at);
   `);
 }
 
@@ -54,9 +70,19 @@ function insertThreatModel(db, payload) {
   return result.lastInsertRowid;
 }
 
+function insertTargets(db, payload) {
+  const stmt = db.prepare(`
+    INSERT INTO targets (threat_model_id, repo_name, repo_path, targets_json)
+    VALUES (@threat_model_id, @repo_name, @repo_path, @targets_json)
+  `);
+  const result = stmt.run(payload);
+  return result.lastInsertRowid;
+}
+
 module.exports = {
   DEFAULT_DB_PATH,
   initSchema,
+  insertTargets,
   insertThreatModel,
   openDatabase,
 };

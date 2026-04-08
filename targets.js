@@ -1,21 +1,20 @@
 'use strict';
 
-const { openDatabase } = require('./db');
-const { runAgenticLoop } = require('./loop')
+const { openDatabase, insertTargets } = require('./db');
+const { runAgenticLoop } = require('./loop');
 
 async function run(prompt) {
-	const result = await runAgenticLoop({
-		prompt,
-		config: { workDir: process.cwd(), approvalMode: 'safe'},
-	});
-	return result;
+  return runAgenticLoop({
+    prompt,
+    config: { workDir: process.cwd(), approvalMode: 'safe' },
+  });
 }
 
-function pull_threat_model({ id, repo_name, repo_path } = {}) {
+function buildThreatModelFilters({ id, repo_name, repo_path } = {}) {
   const hasAnyFilter =
-    id !== undefined && id !== null
-    || (typeof repo_name === 'string' && repo_name.trim())
-    || (typeof repo_path === 'string' && repo_path.trim());
+    (id !== undefined && id !== null) ||
+    (typeof repo_name === 'string' && repo_name.trim()) ||
+    (typeof repo_path === 'string' && repo_path.trim());
 
   if (!hasAnyFilter) {
     throw new Error('At least one of id, repo_name, or repo_path is required.');
@@ -37,6 +36,11 @@ function pull_threat_model({ id, repo_name, repo_path } = {}) {
     params.repo_path = repo_path.trim();
   }
 
+  return { conditions, params };
+}
+
+function pull_threat_model_row(filters = {}) {
+  const { conditions, params } = buildThreatModelFilters(filters);
   const sql = `
     SELECT id, repo_name, repo_path, threat_model, created_at
     FROM threat_models
@@ -51,36 +55,152 @@ function pull_threat_model({ id, repo_name, repo_path } = {}) {
     if (!row) {
       throw new Error('No threat model found for the provided filters.');
     }
-
-    const threatModelText = String(row.threat_model ?? '');
-    //console.log(threatModelText);
-    return threatModelText;
+    return row;
   } finally {
     db.close();
   }
 }
 
+function pull_threat_model(filters = {}) {
+  const row = pull_threat_model_row(filters);
+  const threatModelText = String(row.threat_model ?? '');
+  console.log(threatModelText);
+  return threatModelText;
+}
+
+function buildCrafterPrompt(threatModelText) {
+  return `
+You are a security researcher and your goal is to find vulnerabilities.
+You are given the following threat model for the given repository:
+
+${threatModelText}
+
+## GOALS
+- Use shell search tools like ripgrep (rg), grep, find, or ctags.
+- Find sources, sinks, and identify the most likely vulnerability targets in the codebase.
+- Targets can include likely vulnerable functions, high-risk code blocks, or high-risk files.
+
+## OUTPUT FORMAT
+Return ONLY valid JSON with this shape:
+{
+  "targets": [
+    {
+      "path": "relative/or/absolute/path",
+      "function": "functionName or N/A",
+      "reason": "short security-focused justification"
+    }
+  ]
+}
+`;
+}
+
+function extractJsonCandidate(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const fenced = raw.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
+  if (fenced) return fenced[1].trim();
+
+  const firstObj = raw.indexOf('{');
+  const lastObj = raw.lastIndexOf('}');
+  if (firstObj >= 0 && lastObj > firstObj) return raw.slice(firstObj, lastObj + 1).trim();
+
+  const firstArr = raw.indexOf('[');
+  const lastArr = raw.lastIndexOf(']');
+  if (firstArr >= 0 && lastArr > firstArr) return raw.slice(firstArr, lastArr + 1).trim();
+
+  return raw;
+}
+
+function parseTargetsJson(modelOutput) {
+  const candidate = extractJsonCandidate(modelOutput);
+  let parsed;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch (err) {
+    throw new Error(`Model output is not valid JSON: ${err.message}`);
+  }
+
+  const targets = Array.isArray(parsed) ? parsed : parsed.targets;
+  if (!Array.isArray(targets)) {
+    throw new Error('JSON must be an array or an object containing a `targets` array.');
+  }
+
+  for (let i = 0; i < targets.length; i += 1) {
+    const t = targets[i];
+    if (!t || typeof t !== 'object') {
+      throw new Error(`targets[${i}] must be an object.`);
+    }
+    if (typeof t.path !== 'string' || !t.path.trim()) {
+      throw new Error(`targets[${i}].path must be a non-empty string.`);
+    }
+    if (typeof t.function !== 'string' || !t.function.trim()) {
+      throw new Error(`targets[${i}].function must be a non-empty string.`);
+    }
+    if (typeof t.reason !== 'string' || !t.reason.trim()) {
+      throw new Error(`targets[${i}].reason must be a non-empty string.`);
+    }
+  }
+
+  return JSON.stringify({ targets }, null, 2);
+}
+
+async function main(filters = {}) {
+  const threatModelRow = pull_threat_model_row(filters);
+  const threatModelText = String(threatModelRow.threat_model ?? '');
+  if (!threatModelText.trim()) {
+    throw new Error('Threat model content is empty.');
+  }
+
+  const prompt = buildCrafterPrompt(threatModelText);
+  const modelOutput = await run(prompt);
+  const targetsJson = parseTargetsJson(modelOutput);
+
+  const db = openDatabase();
+  try {
+    const targetsId = insertTargets(db, {
+      threat_model_id: threatModelRow.id,
+      repo_name: threatModelRow.repo_name,
+      repo_path: threatModelRow.repo_path,
+      targets_json: targetsJson,
+    });
+
+    const count = JSON.parse(targetsJson).targets.length;
+    console.log(
+      `Stored targets id=${targetsId} threat_model_id=${threatModelRow.id} repo=${threatModelRow.repo_name} count=${count}`
+    );
+    return { id: targetsId, threat_model_id: threatModelRow.id, count };
+  } finally {
+    db.close();
+  }
+}
+
+function parseCliArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--id') {
+      out.id = Number.parseInt(argv[i + 1], 10);
+      i += 1;
+    } else if (arg === '--repo-name') {
+      out.repo_name = argv[i + 1];
+      i += 1;
+    } else if (arg === '--repo-path') {
+      out.repo_path = argv[i + 1];
+      i += 1;
+    }
+  }
+  return out;
+}
+
 module.exports = {
+  main,
+  parseTargetsJson,
   pull_threat_model,
+  pull_threat_model_row,
 };
 
-var t_m = pull_threat_model({ id: 1 });
-console.log(t_m)
-
-async function main() {
-	const prompt = `
-You are a security researcher and your goal is to find vulnerabilities
-You are given the following threat model for the given repository -
-${t_m}
-
-## GOALS -
-- using shell search tools like ripgrep (rg), grep, find, or ctags 
-- find the entry points like Sources, sinks and identify the most likely targets in the codebase
-- these targets can include likely vulnerable functions, high risk functions or code or entire code files 
-
-## Output -
-List the identified targets in json format containing path, function, reason 
-`
-	console.log(prompt)
+if (require.main === module) {
+  const args = parseCliArgs(process.argv.slice(2));
+  main(args).catch(console.error);
 }
-main().catch(console.error)
