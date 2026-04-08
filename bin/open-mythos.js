@@ -3,12 +3,12 @@
 
 const { program } = require('commander');
 const path = require('path');
-const pkg = require('../package.json');
+const { version, description } = require('../package.json');
 
 program
   .name('open-mythos')
-  .description(pkg.description)
-  .version(pkg.version);
+  .description(description)
+  .version(version);
 
 // ── run ───────────────────────────────────────────────────────────────────────
 program
@@ -17,7 +17,7 @@ program
   .option('--repo-path <path>', 'Path to the repository (default: cwd)')
   .option('--repo-name <n>', 'Override repository name')
   .action(async (opts) => {
-    const { runPipeline } = require('../src/open-mythos');
+    const { runPipeline } = require('../src');
     await runPipeline({
       repoPath: opts.repoPath ? path.resolve(opts.repoPath) : process.cwd(),
       repoName: opts.repoName,
@@ -31,8 +31,8 @@ program
   .option('--repo-path <path>', 'Path to the repository (default: cwd)')
   .action(async (opts) => {
     if (opts.repoPath) process.chdir(path.resolve(opts.repoPath));
-    const { main } = require('../src/recon');
-    await main().catch(fatal);
+    const { runRecon } = require('../src');
+    await runRecon().catch(fatal);
   });
 
 // ── targets ───────────────────────────────────────────────────────────────────
@@ -43,8 +43,8 @@ program
   .option('--repo-name <n>',    'Filter by repository name')
   .option('--repo-path <path>', 'Filter by repository path')
   .action(async (opts) => {
-    const { main } = require('../src/targets');
-    await main({
+    const { runTargets } = require('../src');
+    await runTargets({
       id:        opts.id,
       repo_name: opts.repoName,
       repo_path: opts.repoPath,
@@ -60,8 +60,8 @@ program
   .option('--repo-path <path>',    'Filter by repository path')
   .option('--limit <n>',           'Max targets to pull per batch (default: 20)', parseIntOpt)
   .action(async (opts) => {
-    const { main } = require('../src/research');
-    await main({
+    const { runResearch } = require('../src');
+    await runResearch({
       threat_model_id: opts.threatModelId,
       repo_name:       opts.repoName,
       repo_path:       opts.repoPath,
@@ -75,8 +75,8 @@ program
   .description('Start the read-only dashboard on localhost')
   .option('--port <n>', 'Port to listen on (default: 7331)', parseIntOpt)
   .action((opts) => {
-    if (opts.port) process.env.DASHBOARD_PORT = String(opts.port);
-    require('../src/server');
+    const { startServer } = require('../src');
+    startServer(opts.port);
   });
 
 // ── db ────────────────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ dbCmd
   .command('path')
   .description('Print the resolved database file path')
   .action(() => {
-    const { DEFAULT_DB_PATH } = require('../src/db');
+    const { DEFAULT_DB_PATH } = require('../src');
     console.log(process.env.OPEN_MYTHOS_DB_PATH || DEFAULT_DB_PATH);
   });
 
@@ -96,7 +96,7 @@ dbCmd
   .command('list')
   .description('List all repositories in the database')
   .action(() => {
-    const { openDatabase } = require('../src/db');
+    const { openDatabase } = require('../src');
     const database = openDatabase();
     try {
       const rows = database.prepare(`

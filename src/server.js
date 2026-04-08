@@ -4,7 +4,8 @@ const http = require('http');
 const path = require('path');
 const { openDatabase } = require('./db');
 
-const PORT = process.env.DASHBOARD_PORT || 7331;
+const DEFAULT_HOST = '127.0.0.1';
+const DEFAULT_PORT = Number.parseInt(process.env.DASHBOARD_PORT || '7331', 10);
 
 // ── DB queries ────────────────────────────────────────────────────────────────
 
@@ -864,8 +865,24 @@ function handleRequest(req, res) {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-const server = http.createServer(handleRequest);
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[open-mythos] Dashboard running at http://127.0.0.1:${PORT}`);
-  console.log(`[open-mythos] Press Ctrl+C to stop.`);
-});
+function start(port = DEFAULT_PORT, host = DEFAULT_HOST) {
+  const resolvedPort = Number.parseInt(String(port), 10);
+  if (Number.isNaN(resolvedPort)) {
+    throw new Error(`Invalid port: ${port}`);
+  }
+
+  const server = http.createServer(handleRequest);
+  server.listen(resolvedPort, host, () => {
+    console.log(`[open-mythos] Dashboard running at http://${host}:${resolvedPort}`);
+    console.log('[open-mythos] Press Ctrl+C to stop.');
+  });
+  return server;
+}
+
+module.exports = {
+  start,
+};
+
+if (require.main === module) {
+  start();
+}
