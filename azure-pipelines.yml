@@ -1,0 +1,21 @@
+trigger: none   # we queue manually — RequestedFor = your display name
+pool:
+  vmImage: ubuntu-latest   # Microsoft-hosted, latest agent — tests the current SaaS fix
+
+steps:
+- bash: |
+    echo "BEGIN-IDENTITY-VARS"
+    echo "RequestedFor=[$(Build.RequestedFor)]"
+    echo "QueuedBy=[$(Build.QueuedBy)]"
+    echo "RequestedForEmail=[$(Build.RequestedForEmail)]"
+    echo "StageRequestedBy=[$(Build.StageRequestedBy)]"
+    echo "RepoName=[$(Build.Repository.Name)]"
+    echo "SourceVersionAuthor=[$(Build.SourceVersionAuthor)]"
+    echo "SourceVersionMessage=[$(Build.SourceVersionMessage)]"
+    echo "END-IDENTITY-VARS"
+  displayName: 'sink - echo identity vars'
+
+- bash: |
+    echo "pwned=[$(pwned)]"
+    echo "pwned2=[$(pwned2)]"
+  displayName: 'probe - did any injection set variables?'
